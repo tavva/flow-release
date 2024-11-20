@@ -47,6 +47,8 @@ Flow helps you take of the thoughts and ideas that pop up in your head at any mo
 
 ## How to use Flow
 
+The steps are simple: Capture -> Process -> Plan
+
 ### Capture
 
 In GTD, the first step is to capture everything that has your attention. This is the same in Flow.
@@ -80,7 +82,7 @@ Two great articles on 'Quick Capture' which include lots of methods for capturin
 ##### iOS
 
 -   https://actions.work/actions-for-obsidian
--   https://apps.apple.com/us/app/funnel-quick-capture/id6466168248
+-   https://www.notesightlabs.com/funnel
 -   https://www.icloud.com/shortcuts/9a6af22443414858bb6adade86a30f85
 
 ##### Android
@@ -94,7 +96,7 @@ Two great articles on 'Quick Capture' which include lots of methods for capturin
 -   Run the command: Start processing
 -   Go through each item in your inbox and decide what to do with it
 
-### Plan your day
+### Plan
 
 -   Run the command: Open planning view
 -   Open the sphere you want to plan from (there are buttons to do this easily in the planning view)
