@@ -1,0 +1,185 @@
+name: Mirror issues to private repo
+
+on:
+  issues:
+    types: [opened, edited, closed, reopened]
+  issue_comment:
+    types: [created, edited, deleted]
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror issue/comment
+        uses: actions/github-script@v7
+        env:
+          TARGET_REPO: tavva/flow
+          SOURCE_REPO: ${{ github.repository }}
+        with:
+          github-token: ${{ secrets.MIRROR_TOKEN }}
+          script: |
+            const tokenRepo = process.env.TARGET_REPO
+            if (!tokenRepo || !tokenRepo.includes('/')) {
+              core.setFailed('TARGET_REPO must look like owner/repo')
+              return
+            }
+
+            const [targetOwner, targetRepo] = tokenRepo.split('/')
+            const sourceRepo = process.env.SOURCE_REPO || context.payload.repository.full_name
+            const markerPrefix = `mirrored-from:${sourceRepo}#`
+            const issueMarker = n => `<!-- ${markerPrefix}${n} -->`
+            const commentMarker = id => `<!-- mirrored-comment:${id} -->`
+
+            function composeIssueBody(issue) {
+              const base = issue.body && issue.body.trim().length ? issue.body : '_No description provided._'
+              return `${base}\n\n---\nMirror of ${issue.html_url}\n${issueMarker(issue.number)}`
+            }
+
+            function composeCommentBody(comment) {
+              const base = comment.body && comment.body.length ? comment.body : '_No comment body provided._'
+              return `*Mirror of @${comment.user.login}'s comment (${comment.html_url})*\n\n${base}\n\n${commentMarker(comment.id)}`
+            }
+
+            async function searchMirroredIssue(number) {
+              const query = `repo:${targetOwner}/${targetRepo} in:body "${markerPrefix}${number}"`
+              const search = await github.rest.search.issuesAndPullRequests({ q: query, per_page: 5 })
+              return search.data.items.find(item => !item.pull_request)
+            }
+
+            async function ensureIssue(issue) {
+              const existing = await searchMirroredIssue(issue.number)
+              const body = composeIssueBody(issue)
+              if (!existing) {
+                const created = await github.rest.issues.create({
+                  owner: targetOwner,
+                  repo: targetRepo,
+                  title: issue.title,
+                  body
+                })
+
+                if (issue.state === 'closed') {
+                  await github.rest.issues.update({
+                    owner: targetOwner,
+                    repo: targetRepo,
+                    issue_number: created.data.number,
+                    state: 'closed'
+                  })
+                }
+
+                return created.data
+              }
+
+              await github.rest.issues.update({
+                owner: targetOwner,
+                repo: targetRepo,
+                issue_number: existing.number,
+                title: issue.title,
+                body
+              })
+
+              if (issue.state !== existing.state) {
+                await github.rest.issues.update({
+                  owner: targetOwner,
+                  repo: targetRepo,
+                  issue_number: existing.number,
+                  state: issue.state
+                })
+              }
+
+              return existing
+            }
+
+            async function resolveMirroredIssue() {
+              const issue = context.payload.issue
+              if (!issue || issue.pull_request) {
+                core.info('Skipping pull request payload')
+                return null
+              }
+
+              return ensureIssue(issue)
+            }
+
+            async function runIssueFlow() {
+              const target = await resolveMirroredIssue()
+              if (!target) return
+
+              const action = context.payload.action
+              if (action === 'closed' || action === 'reopened') {
+                const desiredState = context.payload.issue.state
+                if (target.state !== desiredState) {
+                  await github.rest.issues.update({
+                    owner: targetOwner,
+                    repo: targetRepo,
+                    issue_number: target.number,
+                    state: desiredState
+                  })
+                }
+              }
+            }
+
+            async function runCommentFlow() {
+              const sourceIssue = context.payload.issue
+              if (!sourceIssue || sourceIssue.pull_request) {
+                core.info('Skipping PR comment')
+                return
+              }
+
+              const mirroredIssue = await searchMirroredIssue(sourceIssue.number)
+              if (!mirroredIssue) {
+                core.warning(`No mirrored issue found for #${sourceIssue.number}`)
+                return
+              }
+
+              const action = context.payload.action
+              const sourceComment = context.payload.comment
+              const marker = commentMarker(sourceComment.id)
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: targetOwner,
+                repo: targetRepo,
+                issue_number: mirroredIssue.number,
+                per_page: 100
+              })
+
+              const existing = comments.find(comment => comment.body && comment.body.includes(marker))
+
+              if (action === 'deleted') {
+                if (existing) {
+                  await github.rest.issues.deleteComment({
+                    owner: targetOwner,
+                    repo: targetRepo,
+                    comment_id: existing.id
+                  })
+                }
+                return
+              }
+
+              const body = composeCommentBody(sourceComment)
+
+              if (!existing) {
+                await github.rest.issues.createComment({
+                  owner: targetOwner,
+                  repo: targetRepo,
+                  issue_number: mirroredIssue.number,
+                  body
+                })
+                return
+              }
+
+              if (action === 'edited') {
+                await github.rest.issues.updateComment({
+                  owner: targetOwner,
+                  repo: targetRepo,
+                  comment_id: existing.id,
+                  body
+                })
+              }
+            }
+
+            if (context.eventName === 'issues') {
+              await runIssueFlow()
+            } else if (context.eventName === 'issue_comment') {
+              await runCommentFlow()
+            } else {
+              core.info(`Unhandled event ${context.eventName}`)
+            }
